@@ -28,7 +28,9 @@ class Airtable extends AbstractProvider
     parent::__construct($options, $collaborators);
   }
 
-  protected $code_challenge_method = 'S256';
+  // protected $code_challenge_method = 'S256';
+  // protected $n = 43;
+
 
   /**
    * Returns authorization parameters based on provided options.
@@ -36,11 +38,30 @@ class Airtable extends AbstractProvider
    * @param  array $options
    * @return array Authorization parameters
    */
-  protected function getAuthorizationParameters(array $options)
+  // protected function getAuthorizationParameters(array $options)
+  // {
+  //   // need to add state, code_challenge,code_challenge_method	
+  //   $options = parent::getAuthorizationParameters($options);
+  //   $options['code_challenge_method	'] = $this->code_challenge_method;
+  // }
+
+  public function getAuthorizationParameters(array $options)
   {
-    // need to add state, code_challenge,code_challenge_method	
-    $options = parent::getAuthorizationParameters($options);
-    $options['code_challenge_method	'] = $this->code_challenge_method;
+    $code_challenge_method = 'S256';
+    $n = 43;
+    $code_verifier = bin2hex(random_bytes($n));
+    $code_challenge = base64_encode(hash('sha256', $code_verifier));
+
+    $params = array_merge(
+      parent::getAuthorizationParameters($options),
+      array_filter([
+        'code_challenge_method' => $code_challenge_method,
+        'code_challenge' => $code_challenge,
+        'state' => $code_verifier
+      ])
+    );
+
+    return $params;
   }
 
   public function getBaseAuthorizationUrl()
@@ -55,7 +76,7 @@ class Airtable extends AbstractProvider
 
   public function getResourceOwnerDetailsUrl(AccessToken $token)
   {
-    return '';
+    return 'https://api.airtable.com/v0/meta/whoami';
   }
 
   public function getDefaultScopes()

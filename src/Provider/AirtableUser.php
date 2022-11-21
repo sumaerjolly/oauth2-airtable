@@ -24,17 +24,7 @@ class AirtableUser implements ResourceOwnerInterface
 
   public function getId()
   {
-    return $this->getValueByKey($this->response, '');
-  }
-
-  public function getEmail()
-  {
-    return $this->getValueByKey($this->response, '');
-  }
-
-  public function getName()
-  {
-    return $this->getValueByKey($this->response, '');
+    return $this->getValueByKey($this->response, 'id');
   }
 
   public function toArray()
