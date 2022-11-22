@@ -48,9 +48,10 @@ class Airtable extends AbstractProvider
   public function getAuthorizationParameters(array $options)
   {
     $code_challenge_method = 'S256';
-    $n = 43;
+    $n = 46;
     $code_verifier = bin2hex(random_bytes($n));
-    $code_challenge = base64_encode(hash('sha256', $code_verifier));
+    $hash = hash('sha256', $code_verifier, true);
+    $code_challenge = rtrim(strtr(base64_encode($hash), '+/', '-_'), '=');
 
     $params = array_merge(
       parent::getAuthorizationParameters($options),
