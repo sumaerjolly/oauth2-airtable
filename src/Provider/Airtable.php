@@ -5,97 +5,192 @@ namespace SumaerJolly\OAuth2\Client\Provider;
 use League\OAuth2\Client\Provider\AbstractProvider;
 use League\OAuth2\Client\Provider\Exception\IdentityProviderException;
 use League\OAuth2\Client\Token\AccessToken;
+use League\OAuth2\Client\Tool\BearerAuthorizationTrait;
+use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
+use RandomLib\Factory as RandomLibFactory;
 use SumaerJolly\OAuth2\Client\Provider\AirtableUser;
 
+
+/**
+ * Represents a Airtable OAuth2 service provider (authorization server).
+ *
+ * @link http://tools.ietf.org/html/rfc6749#section-1.1 Roles (RFC 6749, §1.1)
+ */
 class Airtable extends AbstractProvider
 {
-  const ACCESS_TOKEN_RESOURCE_OWNER_ID = 'id';
+  use BearerAuthorizationTrait;
 
   /**
-   * Constructs an OAuth 2.0 service provider.
+   * In addition to state, store a PKCE verifier that will be used when
+   * getting the authorization token.
    *
-   * @param array $options An array of options to set on this provider.
-   *     Options include `clientId`, `clientSecret`, `redirectUri`, and `state`.
-   *     Individual providers may introduce more options, as needed.
-   * @param array $collaborators An array of collaborators that may be used to
-   *     override this provider's default behavior. Collaborators include
-   *     `grantFactory`, `requestFactory`, `httpClient`, and `randomFactory`.
-   *     Individual providers may introduce more collaborators, as needed.
+   * @link https://www.oauth.com/oauth2-servers/pkce/authorization-code-exchange/
+   *
+   * @var string
    */
-  public function __construct(array $options = [], array $collaborators = [])
-  {
-    parent::__construct($options, $collaborators);
-  }
-
-  // protected $code_challenge_method = 'S256';
-  // protected $n = 43;
-
+  protected string $pkceVerifier;
 
   /**
-   * Returns authorization parameters based on provided options.
+   * Get the unhashed PKCE Verifier string for the request.
    *
-   * @param  array $options
-   * @return array Authorization parameters
+   * @return string
    */
-  // protected function getAuthorizationParameters(array $options)
-  // {
-  //   // need to add state, code_challenge,code_challenge_method	
-  //   $options = parent::getAuthorizationParameters($options);
-  //   $options['code_challenge_method	'] = $this->code_challenge_method;
-  // }
-
-  public function getAuthorizationParameters(array $options)
+  public function getPkceVerifier(): string
   {
-    $code_challenge_method = 'S256';
-    $n = 46;
-    $code_verifier = bin2hex(random_bytes($n));
-    $hash = hash('sha256', $code_verifier, true);
-    $code_challenge = rtrim(strtr(base64_encode($hash), '+/', '-_'), '=');
+    if (!isset($this->pkceVerifier)) {
+      $this->pkceVerifier = $this->generatePkceVerifier();
+    }
 
-    $params = array_merge(
-      parent::getAuthorizationParameters($options),
-      array_filter([
-        'code_challenge_method' => $code_challenge_method,
-        'code_challenge' => $code_challenge,
-        'state' => $code_verifier
-      ])
-    );
-
-    return $params;
+    return $this->pkceVerifier;
   }
 
-  public function getBaseAuthorizationUrl()
+  /**
+   * Returns the base URL for authorizing a client.
+   *
+   * Eg. https://oauth.service.com/authorize
+   *
+   * @return string
+   */
+  public function getBaseAuthorizationUrl(): string
   {
     return 'https://airtable.com/oauth2/v1/authorize';
   }
 
-  public function getBaseAccessTokenUrl(array $params)
+  protected function getAuthorizationParameters(array $options): array
+  {
+    if (!isset($options['code_challenge'])) {
+      $options['code_challenge'] = $this->generatePkceChallenge();
+      $options['code_challenge_method'] = 'S256';
+    }
+
+    return parent::getAuthorizationParameters($options);
+  }
+
+  /**
+   * Returns a prepared request for requesting an access token. Overridden
+   * to add the required headers for Airtable
+   *
+   * @param array $params Query string parameters
+   * @return RequestInterface
+   */
+  protected function getAccessTokenRequest(array $params): RequestInterface
+  {
+    $request = parent::getAccessTokenRequest($params);
+
+    $token_string = base64_encode($this->clientId . ':' . $this->clientSecret);
+
+    return $request->withHeader('Authorization', "Basic $token_string");
+  }
+
+  /**
+   * Returns the base URL for requesting an access token.
+   *
+   * Eg. https://oauth.service.com/token
+   *
+   * @param array $params
+   * @return string
+   */
+  public function getBaseAccessTokenUrl(array $params): string
   {
     return 'https://airtable.com/oauth2/v1/token';
   }
 
-  public function getResourceOwnerDetailsUrl(AccessToken $token)
+  /**
+   * Returns the URL for requesting the resource owner's details.
+   *
+   * @param AccessToken $token
+   * @return string
+   */
+  public function getResourceOwnerDetailsUrl(AccessToken $token): string
   {
     return 'https://api.airtable.com/v0/meta/whoami';
   }
 
-  public function getDefaultScopes()
+  /**
+   * Returns the default scopes used by this provider.
+   *
+   * This should only be the scopes that are required to request the details
+   * of the resource owner, rather than all the available scopes.
+   *
+   * @return array
+   */
+  protected function getDefaultScopes(): array
   {
     return [];
   }
 
-  public function checkResponse(ResponseInterface $response, $data)
+  /**
+   * Checks a provider response for errors.
+   *
+   * @throws IdentityProviderException
+   * @param  ResponseInterface $response
+   * @param  array|string $data Parsed response data
+   * @return void
+   */
+  protected function checkResponse(ResponseInterface $response, $data): void
   {
-    if (!empty($data['errors'])) {
-      throw new IdentityProviderException($data['errors'], 0, $data);
+    if ($response->getStatusCode() == 200) {
+      return;
     }
 
-    return $data;
+    $error = $data['error_description'] ?? '';
+    $code = $data['code'] ?? $response->getStatusCode();
+
+    throw new IdentityProviderException($error, $code, $data);
   }
 
-  protected function createResourceOwner(array $response, AccessToken $token)
+  /**
+   * Generates a resource owner object from a successful resource owner
+   * details request.
+   *
+   * @param  array $response
+   * @param  AccessToken $token
+   * @return AirtableUser
+   */
+  protected function createResourceOwner(array $response, AccessToken $token): AirtableUser
   {
     return new AirtableUser($response);
+  }
+
+  /**
+   * Gives a URL-friendly Base64-encoded version of a string
+   *
+   * @link https://www.oauth.com/oauth2-servers/pkce/authorization-request/
+   *
+   * @param string $param String to encode
+   * @return string
+   */
+  private function base64Urlencode(string $param): string
+  {
+    return rtrim(strtr(base64_encode($param), '+/', '-_'), '=');
+  }
+
+  /**
+   * Create a PKCE verifier string.
+   *
+   * @link https://www.oauth.com/oauth2-servers/pkce/authorization-request/
+   *
+   * @return string
+   */
+  public function generatePkceVerifier(): string
+  {
+    $generator = (new RandomLibFactory)->getMediumStrengthGenerator();
+    return $generator->generateString(
+      $generator->generateInt(43, 128), // Length between 43-128 characters
+      '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-._~'
+    );
+  }
+
+  /**
+   * Get the hashed and encoded PKCE challenge string for the request.
+   *
+   * @param string $passed_verifier Verifier string to use. Defaults to $this->getPkceVerifier().
+   * @return string
+   */
+  public function generatePkceChallenge(string $passed_verifier = null): string
+  {
+    $verifier = $passed_verifier ?? $this->getPkceVerifier();
+    return $this->base64Urlencode(hash('SHA256', $verifier, true));
   }
 }
